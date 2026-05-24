@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/philiaspace/mondaiphi/config"
 	"github.com/philiaspace/mondaiphi/handlers"
 	"github.com/philiaspace/mondaiphi/repositories/postgres"
@@ -17,6 +18,7 @@ import (
 )
 
 func main() {
+	_ = godotenv.Load()
 	logger := observability.NewLogger(os.Getenv("LOG_LEVEL"))
 	cfg := config.Load()
 
@@ -58,6 +60,7 @@ func main() {
 	// Initialize handlers
 	questionHandler := handlers.NewQuestionHandler(repo, s3Client)
 	adminHandler := handlers.NewAdminHandler(repo)
+	dashboardHandler := handlers.NewDashboardHandler(repo, s3Client)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +71,7 @@ func main() {
 	// Register routes
 	questionHandler.RegisterRoutes(mux)
 	adminHandler.RegisterRoutes(mux)
+	dashboardHandler.RegisterRoutes(mux)
 
 	// Apply middleware chain
 	handler := middleware.Chain(mux,
@@ -81,7 +85,7 @@ func main() {
 			ExpectedIssuer: cfg.AuthJWKSURL,
 			Audience:       "philia-space",
 			CacheTTL:       5 * time.Minute,
-			SkipPaths:      []string{"/health", "/.well-known", "/questions", "/passages", "/templates", "/assets"},
+			SkipPaths:      []string{"/health", "/.well-known", "/questions", "/internal", "/passages", "/templates", "/assets", "/dashboard"},
 		}),
 	)
 

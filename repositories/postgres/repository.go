@@ -99,7 +99,7 @@ func (r *QuestionRepository) Delete(ctx context.Context, id string) error {
 func (r *QuestionRepository) FindByLevelAndSection(ctx context.Context, level examd.JLPTLevel, section examd.Section, limit int) ([]domain.Question, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, level, section, prompt, context, answer_value, answer_note, passage_id, source_group_key, version
-		FROM questions WHERE level = $1 AND section = $2 LIMIT $3
+		FROM questions WHERE level = $1 AND section = $2 ORDER BY id DESC LIMIT $3
 	`, level, section, limit)
 	if err != nil {
 		return nil, err
@@ -107,6 +107,66 @@ func (r *QuestionRepository) FindByLevelAndSection(ctx context.Context, level ex
 	defer rows.Close()
 
 	return r.scanQuestions(rows)
+}
+
+func (r *QuestionRepository) CountByLevelAndSection(ctx context.Context, level examd.JLPTLevel, section examd.Section) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM questions WHERE level = $1 AND section = $2`, level, section).Scan(&count)
+	return count, err
+}
+
+func (r *QuestionRepository) SearchQuestions(ctx context.Context, level examd.JLPTLevel, section examd.Section, search string, sort string, sortDir string, limit int, offset int) ([]domain.Question, int, error) {
+	where := "WHERE 1=1"
+	args := []interface{}{}
+	argN := 1
+
+	if level != "" {
+		where += fmt.Sprintf(" AND level = $%d", argN)
+		args = append(args, string(level))
+		argN++
+	}
+	if section != "" {
+		where += fmt.Sprintf(" AND section = $%d", argN)
+		args = append(args, string(section))
+		argN++
+	}
+	if search != "" {
+		where += fmt.Sprintf(" AND (prompt ILIKE $%d OR context ILIKE $%d OR id ILIKE $%d)", argN, argN, argN)
+		args = append(args, "%"+search+"%")
+		argN++
+	}
+
+	allowedSorts := map[string]string{"id": "id", "level": "level", "section": "section", "prompt": "prompt", "answer_value": "answer_value"}
+	orderBy := "id DESC"
+	if col, ok := allowedSorts[sort]; ok {
+		dir := "ASC"
+		if strings.EqualFold(sortDir, "desc") {
+			dir = "DESC"
+		}
+		orderBy = col + " " + dir
+	}
+
+	var total int
+	countArgs := make([]interface{}, len(args))
+	copy(countArgs, args)
+	if err := r.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM questions %s", where), countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	query := fmt.Sprintf("SELECT id, level, section, prompt, context, answer_value, answer_note, passage_id, source_group_key, version FROM questions %s ORDER BY %s LIMIT $%d OFFSET $%d", where, orderBy, argN, argN+1)
+	args = append(args, limit, offset)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	questions, err := r.scanQuestions(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return questions, total, nil
 }
 
 // FindByPassageID returns questions belonging to a passage.
@@ -337,6 +397,121 @@ func (r *QuestionRepository) FindAssetByID(ctx context.Context, id string) (*dom
 	return &a, nil
 }
 
+// ListPassages returns passages filtered by level and section.
+func (r *QuestionRepository) ListPassages(ctx context.Context, level examd.JLPTLevel, section examd.Section, limit int) ([]domain.Passage, error) {
+	query := `SELECT id, passage_number, title, content, level, section FROM passages WHERE 1=1`
+	args := []interface{}{}
+	argN := 1
+
+	if level != "" {
+		query += fmt.Sprintf(" AND level = $%d", argN)
+		args = append(args, string(level))
+		argN++
+	}
+	if section != "" {
+		query += fmt.Sprintf(" AND section = $%d", argN)
+		args = append(args, string(section))
+		argN++
+	}
+	query += fmt.Sprintf(" ORDER BY id DESC LIMIT $%d", argN)
+	args = append(args, limit)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var passages []domain.Passage
+	for rows.Next() {
+		var p domain.Passage
+		var title sql.NullString
+		if err := rows.Scan(&p.ID, &p.PassageNumber, &title, &p.Content, &p.Level, &p.Section); err != nil {
+			return nil, err
+		}
+		p.Title = title.String
+		passages = append(passages, p)
+	}
+	return passages, rows.Err()
+}
+
+// FindAssetsByQuestionID returns all assets for a single question.
+func (r *QuestionRepository) FindAssetsByQuestionID(ctx context.Context, questionID string) ([]domain.Asset, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, type, source_url, s3_key, local_path, question_id, passage_id
+		FROM assets WHERE question_id = $1
+	`, questionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var assets []domain.Asset
+	for rows.Next() {
+		var a domain.Asset
+		var qID, pID sql.NullString
+		if err := rows.Scan(&a.ID, &a.Type, &a.SourceURL, &a.S3Key, &a.LocalPath, &qID, &pID); err != nil {
+			return nil, err
+		}
+		if qID.Valid {
+			a.QuestionID = examd.QuestionID(qID.String)
+		}
+		if pID.Valid {
+			a.PassageID = examd.PassageID(pID.String)
+		}
+		assets = append(assets, a)
+	}
+	return assets, rows.Err()
+}
+
+// ListAssets returns paginated assets with optional type filter.
+func (r *QuestionRepository) ListAssets(ctx context.Context, assetType string, limit int, offset int) ([]domain.Asset, int, error) {
+	countQuery := `SELECT COUNT(*) FROM assets WHERE 1=1`
+	dataQuery := `SELECT id, type, source_url, s3_key, local_path, question_id, passage_id FROM assets WHERE 1=1`
+	args := []interface{}{}
+	argN := 1
+
+	if assetType != "" {
+		countQuery += fmt.Sprintf(" AND type = $%d", argN)
+		dataQuery += fmt.Sprintf(" AND type = $%d", argN)
+		args = append(args, assetType)
+		argN++
+	}
+
+	var total int
+	countArgs := make([]interface{}, len(args))
+	copy(countArgs, args)
+	if err := r.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	dataQuery += fmt.Sprintf(" ORDER BY id DESC LIMIT $%d OFFSET $%d", argN, argN+1)
+	args = append(args, limit, offset)
+
+	rows, err := r.db.QueryContext(ctx, dataQuery, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var assets []domain.Asset
+	for rows.Next() {
+		var a domain.Asset
+		var qID, pID sql.NullString
+		if err := rows.Scan(&a.ID, &a.Type, &a.SourceURL, &a.S3Key, &a.LocalPath, &qID, &pID); err != nil {
+			return nil, 0, err
+		}
+		if qID.Valid {
+			a.QuestionID = examd.QuestionID(qID.String)
+		}
+		if pID.Valid {
+			a.PassageID = examd.PassageID(pID.String)
+		}
+		assets = append(assets, a)
+	}
+	return assets, total, rows.Err()
+}
+
 // ListTemplates returns all package templates for a level.
 func (r *QuestionRepository) ListTemplates(ctx context.Context, level examd.JLPTLevel) ([]domain.PackageTemplate, error) {
 	rows, err := r.db.QueryContext(ctx, `
@@ -390,6 +565,26 @@ func (r *QuestionRepository) scanQuestions(rows *sql.Rows) ([]domain.Question, e
 		questions = append(questions, q)
 	}
 	return questions, rows.Err()
+}
+
+// SaveOptions saves options for a question (deletes existing first).
+func (r *QuestionRepository) SaveOptions(ctx context.Context, questionID string, options []domain.Option) error {
+	// Delete existing options
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM options WHERE question_id = $1`, questionID); err != nil {
+		return err
+	}
+
+	// Insert new options
+	for _, opt := range options {
+		_, err := r.db.ExecContext(ctx, `
+			INSERT INTO options (question_id, value, label, sort_order)
+			VALUES ($1, $2, $3, $4)
+		`, questionID, opt.Value, opt.Label, opt.SortOrder)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func sqlNullString(s string) sql.NullString {

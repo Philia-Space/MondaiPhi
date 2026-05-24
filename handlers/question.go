@@ -24,6 +24,7 @@ func NewQuestionHandler(repo domain.QuestionRepository, s3Client *storage.S3Clie
 func (h *QuestionHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /questions", h.List)
 	mux.HandleFunc("GET /questions/{id}", h.Get)
+	mux.HandleFunc("GET /internal/questions/{id}", h.GetInternal)
 	mux.HandleFunc("GET /passages/{id}", h.GetPassage)
 	mux.HandleFunc("GET /templates", h.ListTemplates)
 	mux.HandleFunc("GET /assets/{id}", h.GetAsset)
@@ -109,7 +110,6 @@ func (h *QuestionHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sanitize options: remove is_correct
 	var sanitizedOptions []OptionResponse
 	for _, opt := range options {
 		sanitizedOptions = append(sanitizedOptions, OptionResponse{
@@ -120,9 +120,19 @@ func (h *QuestionHandler) Get(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	assets, _ := h.repo.FindAssetsByQuestionID(r.Context(), string(question.ID))
+	var assetResponses []AssetResponse
+	for _, a := range assets {
+		assetResponses = append(assetResponses, AssetResponse{
+			ID:   string(a.ID),
+			Type: a.Type,
+		})
+	}
+
 	transport.OK(w, map[string]interface{}{
 		"question": sanitizeQuestion(*question),
 		"options":  sanitizedOptions,
+		"assets":   assetResponses,
 	})
 }
 
@@ -245,11 +255,27 @@ type QuestionResponse struct {
 	SourceGroupKey string `json:"source_group_key,omitempty"`
 }
 
+type InternalQuestionResponse struct {
+	ID             string `json:"id"`
+	Level          string `json:"level"`
+	Section        string `json:"section"`
+	Prompt         string `json:"prompt"`
+	Context        string `json:"context,omitempty"`
+	AnswerValue    string `json:"answer_value"`
+	PassageID      string `json:"passage_id,omitempty"`
+	SourceGroupKey string `json:"source_group_key,omitempty"`
+}
+
 type OptionResponse struct {
 	ID        string `json:"id"`
 	Value     string `json:"value"`
 	Label     string `json:"label"`
 	SortOrder int    `json:"sort_order"`
+}
+
+type AssetResponse struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
 }
 
 func sanitizeQuestion(q domain.Question) QuestionResponse {
@@ -262,6 +288,47 @@ func sanitizeQuestion(q domain.Question) QuestionResponse {
 		PassageID:      string(q.PassageID),
 		SourceGroupKey: q.SourceGroupKey,
 	}
+}
+
+func (h *QuestionHandler) GetInternal(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		transport.BadRequest(w, "question id is required")
+		return
+	}
+
+	question, options, err := h.repo.FindWithOptions(r.Context(), examd.QuestionID(id))
+	if err != nil {
+		status := transport.FromError(w, err)
+		if status == 0 {
+			transport.InternalError(w, "failed to fetch question")
+		}
+		return
+	}
+
+	var optResponses []OptionResponse
+	for _, opt := range options {
+		optResponses = append(optResponses, OptionResponse{
+			ID:        opt.ID,
+			Value:     opt.Value,
+			Label:     opt.Label,
+			SortOrder: opt.SortOrder,
+		})
+	}
+
+	transport.OK(w, map[string]interface{}{
+		"question": InternalQuestionResponse{
+			ID:             string(question.ID),
+			Level:          string(question.Level),
+			Section:        string(question.Section),
+			Prompt:         question.Prompt,
+			Context:        question.Context,
+			AnswerValue:    question.AnswerValue,
+			PassageID:      string(question.PassageID),
+			SourceGroupKey: question.SourceGroupKey,
+		},
+		"options": optResponses,
+	})
 }
 
 func isValidLevel(level examd.JLPTLevel) bool {

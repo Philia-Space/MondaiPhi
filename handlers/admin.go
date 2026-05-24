@@ -7,6 +7,7 @@ import (
 	"github.com/philiaspace/mondaiphi/internal/domain"
 	examd "github.com/philiaspace/phi-exam-domain/domain"
 	"github.com/philiaspace/phi-core/transport"
+	"github.com/philiaspace/phi-utils/id"
 )
 
 // AdminHandler handles admin CRUD routes for questions, passages, and assets.
@@ -68,6 +69,23 @@ func (h *AdminHandler) CreateQuestion(w http.ResponseWriter, r *http.Request) {
 	if err := h.repo.Save(r.Context(), question); err != nil {
 		transport.InternalError(w, "failed to create question")
 		return
+	}
+
+	// Save options if provided
+	if len(req.Options) > 0 {
+		var options []domain.Option
+		for _, o := range req.Options {
+			options = append(options, domain.Option{
+				QuestionID: question.ID,
+				Value:      o.Value,
+				Label:      o.Label,
+				SortOrder:  o.SortOrder,
+			})
+		}
+		if err := h.repo.SaveOptions(r.Context(), string(question.ID), options); err != nil {
+			transport.InternalError(w, "failed to save options")
+			return
+		}
 	}
 
 	transport.Created(w, map[string]interface{}{
@@ -278,8 +296,7 @@ type OptionRequest struct {
 	SortOrder int    `json:"sort_order"`
 }
 
-// generateShortID creates a short random identifier
+// generateShortID creates a ULID-based identifier
 func generateShortID() string {
-	// Simple implementation - in production use proper ULID generation
-	return "temp"
+	return id.GenerateULID()
 }

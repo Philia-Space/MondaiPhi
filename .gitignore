@@ -3,3 +3,5 @@ bin/
 *.log
 coverage.out
 coverage.html
+node_modules/
+.next/
