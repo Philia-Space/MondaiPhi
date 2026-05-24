@@ -310,6 +310,33 @@ func (r *QuestionRepository) FindAssetsForPassages(ctx context.Context, ids []ex
 	return result, rows.Err()
 }
 
+// FindAssetByID returns a single asset by ID.
+func (r *QuestionRepository) FindAssetByID(ctx context.Context, id string) (*domain.Asset, error) {
+	var a domain.Asset
+	var qID, pID sql.NullString
+
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, type, source_url, s3_key, local_path, question_id, passage_id
+		FROM assets WHERE id = $1
+	`, id).Scan(&a.ID, &a.Type, &a.SourceURL, &a.S3Key, &a.LocalPath, &qID, &pID)
+
+	if err == sql.ErrNoRows {
+		return nil, errors.New("NOT_FOUND", fmt.Sprintf("asset not found: %s", id))
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if qID.Valid {
+		a.QuestionID = examd.QuestionID(qID.String)
+	}
+	if pID.Valid {
+		a.PassageID = examd.PassageID(pID.String)
+	}
+
+	return &a, nil
+}
+
 // ListTemplates returns all package templates for a level.
 func (r *QuestionRepository) ListTemplates(ctx context.Context, level examd.JLPTLevel) ([]domain.PackageTemplate, error) {
 	rows, err := r.db.QueryContext(ctx, `

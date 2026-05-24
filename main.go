@@ -13,6 +13,7 @@ import (
 	"github.com/philiaspace/mondaiphi/repositories/postgres"
 	"github.com/philiaspace/phi-core/observability"
 	"github.com/philiaspace/phi-middleware"
+	storage "github.com/philiaspace/phi-storage/s3"
 )
 
 func main() {
@@ -34,8 +35,28 @@ func main() {
 	// Initialize repositories
 	repo := postgres.NewQuestionRepository(db)
 
+	// Initialize S3 storage
+	var s3Client *storage.S3Client
+	if cfg.StorageAccessKey != "" && cfg.StorageSecretKey != "" {
+		var err error
+		s3Client, err = storage.NewS3Client(storage.S3Config{
+			Endpoint:   cfg.StorageEndpoint,
+			Region:     cfg.StorageRegion,
+			Bucket:     cfg.StorageBucket,
+			AccessKey:  cfg.StorageAccessKey,
+			SecretKey:  cfg.StorageSecretKey,
+			UseSSL:     cfg.UseSSL,
+			PresignTTL: cfg.StoragePresignTTL,
+		})
+		if err != nil {
+			logger.Error(ctx, "failed to initialize S3 storage", "err", err)
+		} else {
+			logger.Info(ctx, "S3 storage initialized", "bucket", cfg.StorageBucket)
+		}
+	}
+
 	// Initialize handlers
-	questionHandler := handlers.NewQuestionHandler(repo)
+	questionHandler := handlers.NewQuestionHandler(repo, s3Client)
 	adminHandler := handlers.NewAdminHandler(repo)
 
 	mux := http.NewServeMux()

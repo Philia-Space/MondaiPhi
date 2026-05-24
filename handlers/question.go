@@ -3,19 +3,22 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/philiaspace/mondaiphi/internal/domain"
 	examd "github.com/philiaspace/phi-exam-domain/domain"
 	"github.com/philiaspace/phi-core/transport"
+	storage "github.com/philiaspace/phi-storage/s3"
 )
 
 // QuestionHandler handles public question routes.
 type QuestionHandler struct {
-	repo domain.QuestionRepository
+	repo   domain.QuestionRepository
+	storage *storage.S3Client
 }
 
-func NewQuestionHandler(repo domain.QuestionRepository) *QuestionHandler {
-	return &QuestionHandler{repo: repo}
+func NewQuestionHandler(repo domain.QuestionRepository, s3Client *storage.S3Client) *QuestionHandler {
+	return &QuestionHandler{repo: repo, storage: s3Client}
 }
 
 func (h *QuestionHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -194,13 +197,39 @@ func (h *QuestionHandler) ListTemplates(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// GetAsset redirects to presigned S3 URL.
+// GetAsset redirects to presigned S3 URL or returns direct URL.
 func (h *QuestionHandler) GetAsset(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement S3 presigned URL redirect
-	// For now, return a placeholder
+	id := r.PathValue("id")
+	if id == "" {
+		transport.BadRequest(w, "asset id is required")
+		return
+	}
+
+	// Fetch asset metadata from database
+	asset, err := h.repo.FindAssetByID(r.Context(), id)
+	if err != nil {
+		transport.FromError(w, err)
+		return
+	}
+
+	if h.storage != nil && asset.S3Key != "" {
+		// Generate presigned URL for private assets
+		presignedURL, err := h.storage.PresignedURL(r.Context(), asset.S3Key, 15*time.Minute)
+		if err == nil {
+			http.Redirect(w, r, presignedURL, http.StatusTemporaryRedirect)
+			return
+		}
+		// Fallback: return direct public URL
+		http.Redirect(w, r, h.storage.ObjectURL(asset.S3Key), http.StatusTemporaryRedirect)
+		return
+	}
+
+	// No S3 configured or asset not uploaded: return metadata
 	transport.OK(w, map[string]interface{}{
-		"asset_id": r.PathValue("id"),
-		"url":      "https://example.com/placeholder",
+		"asset_id":   asset.ID,
+		"type":       asset.Type,
+		"source_url": asset.SourceURL,
+		"s3_key":     asset.S3Key,
 	})
 }
 

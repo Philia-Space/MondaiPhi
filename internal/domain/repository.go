@@ -18,5 +18,6 @@ type QuestionRepository interface {
 	FindPassageByID(ctx context.Context, id examd.PassageID) (*Passage, error)
 	FindAssetsForQuestions(ctx context.Context, ids []examd.QuestionID) (map[examd.QuestionID][]Asset, error)
 	FindAssetsForPassages(ctx context.Context, ids []examd.PassageID) (map[examd.PassageID][]Asset, error)
+	FindAssetByID(ctx context.Context, id string) (*Asset, error)
 	ListTemplates(ctx context.Context, level examd.JLPTLevel) ([]PackageTemplate, error)
 }
