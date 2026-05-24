@@ -22,7 +22,7 @@ func Load() *Config {
 	return &Config{
 		ServerPort:        getEnv("MONDAIPHI_PORT", "8087"),
 		Environment:     getEnv("MONDAIPHI_ENVIRONMENT", "development"),
-		DatabaseURL:     getEnv("MONDAIPHI_DATABASE_URL", "postgres://phi:phi_dev_password@localhost:5433/mondaiphi?sslmode=disable"),
+		DatabaseURL:     getEnv("MONDAIPHI_DATABASE_URL", "postgres://phi:phi_dev_password@localhost:5432/mondaiphi?sslmode=disable"),
 		AuthJWKSURL:     getEnv("MONDAIPHI_AUTH_JWKS_URL", "http://localhost:8080/.well-known/jwks.json"),
 		StorageEndpoint: getEnv("MONDAIPHI_STORAGE_ENDPOINT", "http://localhost:9000"),
 		StorageRegion:   getEnv("MONDAIPHI_STORAGE_REGION", "us-east-1"),

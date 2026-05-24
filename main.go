@@ -60,7 +60,7 @@ func main() {
 			ExpectedIssuer: cfg.AuthJWKSURL,
 			Audience:       "philia-space",
 			CacheTTL:       5 * time.Minute,
-			SkipPaths:      []string{"/health", "/.well-known"},
+			SkipPaths:      []string{"/health", "/.well-known", "/questions", "/passages", "/templates", "/assets"},
 		}),
 	)
 
