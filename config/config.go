@@ -20,6 +20,7 @@ type Config struct {
 	StoragePresignTTL time.Duration
 	UseSSL            bool
 	AdminUserIDs      string // comma-separated Discord IDs
+	ServiceSecret     string // shared secret for service-to-service auth
 }
 
 // Load reads configuration from environment variables with sensible defaults for local dev.
@@ -37,6 +38,7 @@ func Load() *Config {
 		StoragePresignTTL: getEnvDuration("MONDAIPHI_STORAGE_PRESIGN_TTL", 1*time.Hour),
 		UseSSL:            getEnv("MONDAIPHI_STORAGE_USE_SSL", "true") == "true",
 		AdminUserIDs:      getEnv("MONDAIPHI_ADMIN_USER_IDS", ""),
+		ServiceSecret:     getEnv("MONDAIPHI_SERVICE_SECRET", "dev-service-secret-change-in-production"),
 	}
 }
 

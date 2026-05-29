@@ -13,12 +13,13 @@ import (
 
 // QuestionHandler handles public question routes.
 type QuestionHandler struct {
-	repo   domain.QuestionRepository
-	storage *storage.S3Client
+	repo          domain.QuestionRepository
+	storage       *storage.S3Client
+	serviceSecret string
 }
 
-func NewQuestionHandler(repo domain.QuestionRepository, s3Client *storage.S3Client) *QuestionHandler {
-	return &QuestionHandler{repo: repo, storage: s3Client}
+func NewQuestionHandler(repo domain.QuestionRepository, s3Client *storage.S3Client, serviceSecret string) *QuestionHandler {
+	return &QuestionHandler{repo: repo, storage: s3Client, serviceSecret: serviceSecret}
 }
 
 func (h *QuestionHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -291,6 +292,13 @@ func sanitizeQuestion(q domain.Question) QuestionResponse {
 }
 
 func (h *QuestionHandler) GetInternal(w http.ResponseWriter, r *http.Request) {
+	// Service-to-service auth: require X-Service-Secret header
+	secret := r.Header.Get("X-Service-Secret")
+	if secret == "" || secret != h.serviceSecret {
+		transport.Forbidden(w, "service auth required")
+		return
+	}
+
 	id := r.PathValue("id")
 	if id == "" {
 		transport.BadRequest(w, "question id is required")

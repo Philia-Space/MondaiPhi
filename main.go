@@ -58,7 +58,7 @@ func main() {
 	}
 
 	// Initialize handlers
-	questionHandler := handlers.NewQuestionHandler(repo, s3Client)
+	questionHandler := handlers.NewQuestionHandler(repo, s3Client, cfg.ServiceSecret)
 	adminHandler := handlers.NewAdminHandler(repo)
 	dashboardHandler := handlers.NewDashboardHandler(repo, s3Client)
 
@@ -85,7 +85,7 @@ func main() {
 			ExpectedIssuer: cfg.AuthJWKSURL,
 			Audience:       "philia-space",
 			CacheTTL:       5 * time.Minute,
-			SkipPaths:      []string{"/health", "/.well-known", "/questions", "/internal", "/passages", "/templates", "/assets", "/dashboard"},
+			SkipPaths:      []string{"/health", "/.well-known", "/questions", "/passages", "/templates", "/assets", "/dashboard"},
 		}),
 	)
 
