@@ -29,12 +29,13 @@ func (r *QuestionRepository) FindByID(ctx context.Context, id string) (*domain.Q
 	var sourceGroupKey sql.NullString
 	var answerNote sql.NullString
 	var context sql.NullString
+	var answerValue sql.NullString
 
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, level, section, prompt, context, answer_value, answer_note, passage_id, source_group_key, version
 		FROM questions WHERE id = $1
 	`, id).Scan(
-		&q.ID, &q.Level, &q.Section, &q.Prompt, &context, &q.AnswerValue,
+		&q.ID, &q.Level, &q.Section, &q.Prompt, &context, &answerValue,
 		&answerNote, &passageID, &sourceGroupKey, &q.Version,
 	)
 	if err == sql.ErrNoRows {
@@ -48,6 +49,7 @@ func (r *QuestionRepository) FindByID(ctx context.Context, id string) (*domain.Q
 	q.SourceGroupKey = sourceGroupKey.String
 	q.AnswerNote = answerNote.String
 	q.Context = context.String
+	q.AnswerValue = answerValue.String
 
 	return &q, nil
 }
@@ -98,15 +100,18 @@ func (r *QuestionRepository) Delete(ctx context.Context, id string) error {
 // FindByLevelAndSection returns questions filtered by JLPT level and section.
 func (r *QuestionRepository) FindByLevelAndSection(ctx context.Context, level examd.JLPTLevel, section examd.Section, limit int) ([]domain.Question, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, level, section, prompt, context, answer_value, answer_note, passage_id, source_group_key, version
-		FROM questions WHERE level = $1 AND section = $2 ORDER BY id DESC LIMIT $3
+		SELECT id, level, section, prompt, context, answer_value, answer_note,
+		       passage_id, source_group_key, version,
+		       year, month, date_label, question_type, section_order, section_title,
+		       source_url, is_practice, point_weight
+		FROM questions WHERE level = $1 AND section = $2 ORDER BY id ASC LIMIT $3
 	`, level, section, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	return r.scanQuestions(rows)
+	return r.scanQuestionsFull(rows)
 }
 
 func (r *QuestionRepository) CountByLevelAndSection(ctx context.Context, level examd.JLPTLevel, section examd.Section) (int, error) {
@@ -553,8 +558,8 @@ func (r *QuestionRepository) scanQuestions(rows *sql.Rows) ([]domain.Question, e
 	var questions []domain.Question
 	for rows.Next() {
 		var q domain.Question
-		var passageID, sourceGroupKey, answerNote, context sql.NullString
-		if err := rows.Scan(&q.ID, &q.Level, &q.Section, &q.Prompt, &context, &q.AnswerValue,
+		var passageID, sourceGroupKey, answerNote, context, answerValue sql.NullString
+		if err := rows.Scan(&q.ID, &q.Level, &q.Section, &q.Prompt, &context, &answerValue,
 			&answerNote, &passageID, &sourceGroupKey, &q.Version); err != nil {
 			return nil, err
 		}
@@ -562,6 +567,7 @@ func (r *QuestionRepository) scanQuestions(rows *sql.Rows) ([]domain.Question, e
 		q.SourceGroupKey = sourceGroupKey.String
 		q.AnswerNote = answerNote.String
 		q.Context = context.String
+		q.AnswerValue = answerValue.String
 		questions = append(questions, q)
 	}
 	return questions, rows.Err()

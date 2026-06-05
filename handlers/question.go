@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/philiaspace/mondaiphi/internal/domain"
@@ -29,6 +32,9 @@ func (h *QuestionHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /passages/{id}", h.GetPassage)
 	mux.HandleFunc("GET /templates", h.ListTemplates)
 	mux.HandleFunc("GET /assets/{id}", h.GetAsset)
+	// Archive / chronological endpoints
+	mux.HandleFunc("GET /exams", h.ListExams)
+	mux.HandleFunc("GET /exams/{id}/questions", h.ListExamQuestions)
 }
 
 // List returns a list of questions filtered by level and section.
@@ -83,7 +89,7 @@ func (h *QuestionHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sanitize: remove answer data
-	var sanitized []QuestionResponse
+	sanitized := make([]QuestionResponse, 0, len(questions))
 	for _, q := range questions {
 		sanitized = append(sanitized, sanitizeQuestion(q))
 	}
@@ -208,7 +214,7 @@ func (h *QuestionHandler) ListTemplates(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// GetAsset redirects to presigned S3 URL or returns direct URL.
+// GetAsset redirects to presigned S3 URL or serves locally.
 func (h *QuestionHandler) GetAsset(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -221,6 +227,15 @@ func (h *QuestionHandler) GetAsset(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		transport.FromError(w, err)
 		return
+	}
+
+	// Try local file if available
+	if asset.LocalPath != "" {
+		localFile := h.findLocalAsset(asset.LocalPath)
+		if localFile != "" {
+			http.ServeFile(w, r, localFile)
+			return
+		}
 	}
 
 	if h.storage != nil && asset.S3Key != "" {
@@ -254,6 +269,14 @@ type QuestionResponse struct {
 	Context        string `json:"context,omitempty"`
 	PassageID      string `json:"passage_id,omitempty"`
 	SourceGroupKey string `json:"source_group_key,omitempty"`
+	// Archive fields
+	Year         int    `json:"year,omitempty"`
+	Month        int    `json:"month,omitempty"`
+	DateLabel    string `json:"date_label,omitempty"`
+	QuestionType int    `json:"question_type,omitempty"`
+	SectionOrder int    `json:"section_order,omitempty"`
+	SectionTitle string `json:"section_title,omitempty"`
+	IsPractice   bool   `json:"is_practice,omitempty"`
 }
 
 type InternalQuestionResponse struct {
@@ -288,6 +311,13 @@ func sanitizeQuestion(q domain.Question) QuestionResponse {
 		Context:        q.Context,
 		PassageID:      string(q.PassageID),
 		SourceGroupKey: q.SourceGroupKey,
+		Year:           q.Year,
+		Month:          q.Month,
+		DateLabel:      q.DateLabel,
+		QuestionType:   q.QuestionType,
+		SectionOrder:   q.SectionOrder,
+		SectionTitle:   q.SectionTitle,
+		IsPractice:     q.IsPractice,
 	}
 }
 
@@ -355,4 +385,119 @@ func isValidSection(section examd.Section) bool {
 		}
 	}
 	return false
+}
+
+// ============================================================
+// ARCHIVE ENDPOINTS — chronological exam browsing
+// ============================================================
+
+// ListExams returns available exams, optionally filtered by level.
+func (h *QuestionHandler) ListExams(w http.ResponseWriter, r *http.Request) {
+	levelParam := r.URL.Query().Get("level")
+	var level examd.JLPTLevel
+	if levelParam != "" {
+		level = examd.JLPTLevel(levelParam)
+		if !isValidLevel(level) {
+			transport.BadRequest(w, "invalid level")
+			return
+		}
+	}
+
+	exams, err := h.repo.ListExams(r.Context(), level, 50)
+	if err != nil {
+		transport.InternalError(w, "failed to fetch exams")
+		return
+	}
+
+	transport.OK(w, map[string]interface{}{
+		"exams": exams,
+		"count": len(exams),
+	})
+}
+
+// ListExamQuestions returns all questions for a specific exam in chronological order.
+func (h *QuestionHandler) ListExamQuestions(w http.ResponseWriter, r *http.Request) {
+	examID := r.PathValue("id")
+	if examID == "" {
+		transport.BadRequest(w, "exam id is required")
+		return
+	}
+
+	questions, err := h.repo.FindQuestionsByExam(r.Context(), examID)
+	if err != nil {
+		transport.InternalError(w, "failed to fetch exam questions")
+		return
+	}
+
+	// Sanitize: remove answer data
+	sanitized := make([]QuestionResponse, 0, len(questions))
+	for _, q := range questions {
+		sanitized = append(sanitized, sanitizeQuestion(q))
+	}
+
+	transport.OK(w, map[string]interface{}{
+		"exam_id":   examID,
+		"questions": sanitized,
+		"count":     len(sanitized),
+	})
+}
+
+// findLocalAsset searches for a media file on the local filesystem using the base filename.
+func (h *QuestionHandler) findLocalAsset(localPath string) string {
+	baseName := filepath.Base(localPath)
+
+	// Search paths relative to common archive media roots
+	searchRoots := []string{
+		"/home/nexsal/Project/philiaspace/De Thi Tieng Nhat Archive",
+	}
+
+	// Also check if the localPath itself is absolute and exists
+	if filepath.IsAbs(localPath) {
+		if _, err := os.Stat(localPath); err == nil {
+			return localPath
+		}
+	}
+
+	for _, root := range searchRoots {
+		var found string
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if !d.IsDir() && d.Name() == baseName {
+				found = path
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if err == nil && found != "" {
+			return found
+		}
+	}
+
+	// Check if the path contains level name (N1-N5) and try to extract it
+	// e.g. "dethitiengnhat_N1/listening/listening_audio/file.mp3"
+	// or "dethitiengnhat_N1/listening/listening_images/file.png"
+	// or "reading_images/file.jpg"
+	for _, level := range []string{"N1", "N2", "N3", "N4", "N5"} {
+		if strings.Contains(localPath, level) {
+			// Try reading images
+			dirPath := filepath.Join(searchRoots[0], "dethitiengnhat_"+level, "reading", "reading_images", baseName)
+			if _, err := os.Stat(dirPath); err == nil {
+				return dirPath
+			}
+			// Try audio directory
+			dirPath = filepath.Join(searchRoots[0], "dethitiengnhat_"+level, "listening", "listening_audio", baseName)
+			if _, err := os.Stat(dirPath); err == nil {
+				return dirPath
+			}
+			// Try images directory
+			dirPath = filepath.Join(searchRoots[0], "dethitiengnhat_"+level, "listening", "listening_images", baseName)
+			if _, err := os.Stat(dirPath); err == nil {
+				return dirPath
+			}
+		}
+	}
+
+	return ""
 }

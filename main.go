@@ -34,6 +34,13 @@ func main() {
 	defer db.Close()
 	logger.Info(ctx, "database connected")
 
+	// Run schema migrations
+	if err := postgres.RunMigrations(ctx, db); err != nil {
+		logger.Error(ctx, "failed to run migrations", "err", err)
+		os.Exit(1)
+	}
+	logger.Info(ctx, "migrations complete")
+
 	// Initialize repositories
 	repo := postgres.NewQuestionRepository(db)
 
@@ -78,14 +85,14 @@ func main() {
 		middleware.Recovery(logger),
 		middleware.Logger(logger),
 		middleware.CORS(),
-		middleware.RateLimit(100),
+		middleware.RateLimit(500),
 		middleware.AuthJWKS(middleware.JWKSAuthConfig{
 			IssuerURL:      cfg.AuthJWKSURL,
 			JWKSEndpoint:   "/.well-known/jwks.json",
 			ExpectedIssuer: cfg.AuthJWKSURL,
 			Audience:       "philia-space",
 			CacheTTL:       5 * time.Minute,
-			SkipPaths:      []string{"/health", "/.well-known", "/questions", "/passages", "/templates", "/assets", "/dashboard"},
+			SkipPaths:      []string{"/health", "/.well-known", "/questions", "/passages", "/templates", "/assets", "/dashboard", "/exams"},
 		}),
 	)
 

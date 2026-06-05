@@ -26,4 +26,8 @@ type QuestionRepository interface {
 	ListAssets(ctx context.Context, assetType string, limit int, offset int) ([]Asset, int, error)
 	ListTemplates(ctx context.Context, level examd.JLPTLevel) ([]PackageTemplate, error)
 	SaveOptions(ctx context.Context, questionID string, options []Option) error
+	// Archive / chronological methods
+	ListExams(ctx context.Context, level examd.JLPTLevel, limit int) ([]Exam, error)
+	FindQuestionsByExam(ctx context.Context, examID string) ([]Question, error)
+	FindExamByDate(ctx context.Context, level examd.JLPTLevel, dateLabel string) (*Exam, error)
 }
